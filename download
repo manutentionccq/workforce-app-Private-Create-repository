@@ -1,0 +1,142 @@
+const XLSX = require('xlsx');
+
+const ROLE_MAP = {
+  chef: 'CM',
+  quai: 'R',
+  lift: 'L',
+  man: 'Ma',
+};
+
+function parseTime(val) {
+  if (!val && val !== 0) return null;
+  if (typeof val === 'string') {
+    const m = val.match(/(\d+)[h:](\d*)/);
+    if (m) return `${m[1].padStart(2,'0')}:${(m[2]||'00').padStart(2,'0')}`;
+    return val;
+  }
+  if (typeof val === 'number') {
+    const totalMin = Math.round(val * 24 * 60);
+    const h = Math.floor(totalMin / 60);
+    const min = totalMin % 60;
+    return `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+  }
+  return null;
+}
+
+function parseDate(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.toISOString().split('T')[0];
+  if (typeof val === 'number') {
+    const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+    return d.toISOString().split('T')[0];
+  }
+  if (typeof val === 'string' && val.match(/\d{4}-\d{2}-\d{2}/)) return val;
+  return String(val);
+}
+
+function detectRole(colIdx, qty, comment='') {
+  const c = (comment||'').toLowerCase();
+  // colIdx: 2=chef/CM, 3=quai/R, 4=lift/L, 5=man/Ma
+  if (colIdx === 2) {
+    if (c.includes('électr') || c.includes('electr')) return 'CE';
+    if (c.includes('quai')) return 'R';
+    if (c.includes('manut')) return 'CMA';
+    return 'CM';
+  }
+  if (colIdx === 3) return 'R';
+  if (colIdx === 4) return 'L';
+  if (colIdx === 5) {
+    if (c.includes('électr') || c.includes('electr')) return 'Ma-elec';
+    if (c.includes('quai')) return 'MQ';
+    if (c.includes('trafic')) return 'Trafic';
+    if (c.includes('ridc') || c.includes('rideau')) return 'Ma-rideaux';
+    return 'Ma';
+  }
+  return 'Ma';
+}
+
+function parseDemandExcel(buffer) {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+  // Find header row (look for 'Chef' or 'chef' or column keywords)
+  let headerRow = -1;
+  for (let i = 0; i < Math.min(20, raw.length); i++) {
+    const row = raw[i];
+    const rowStr = row.map(c => String(c||'').toLowerCase()).join('|');
+    if (rowStr.includes('chef') && rowStr.includes('man')) {
+      headerRow = i;
+      break;
+    }
+  }
+  if (headerRow === -1) headerRow = 14; // fallback
+
+  const dataRows = raw.slice(headerRow + 1);
+
+  const lignes = [];
+  let currentDate = null;
+  let currentEvent = null;
+  let groupCounter = 0;
+  let prevHadContent = false;
+  let currentGroup = null;
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    if (!row || row.every(c => !c)) continue;
+
+    const rawDate = row[0];
+    const rawEvent = row[1];
+    const chef = row[2];
+    const quai = row[3];
+    const lift = row[4];
+    const man = row[5];
+    const heureDebut = row[6];
+    const heureFin = row[7];
+    const comment = row[8] ? String(row[8]).trim() : '';
+
+    if (rawDate) currentDate = parseDate(rawDate);
+    if (rawEvent) {
+      // New event — new group only if previous row was different event
+      if (String(rawEvent) !== String(currentEvent)) {
+        currentEvent = String(rawEvent).trim();
+        // New group if there was a blank line before (prevHadContent = false)
+        if (!prevHadContent) {
+          groupCounter++;
+          currentGroup = `G${groupCounter}`;
+        }
+      }
+    }
+
+    const roleCols = [
+      [2, chef],
+      [3, quai],
+      [4, lift],
+      [5, man],
+    ];
+
+    let rowHasContent = false;
+    for (const [colIdx, qty] of roleCols) {
+      if (qty && !isNaN(qty) && Number(qty) > 0) {
+        rowHasContent = true;
+        const role = detectRole(colIdx, qty, comment);
+        lignes.push({
+          date: currentDate,
+          evenement: currentEvent,
+          role,
+          quantite: Number(qty),
+          heure_debut: parseTime(heureDebut),
+          heure_fin: parseTime(heureFin),
+          commentaires: comment,
+          groupe_equipe: currentGroup,
+          ordre: i,
+        });
+      }
+    }
+    prevHadContent = rowHasContent;
+  }
+
+  return lignes;
+}
+
+module.exports = { parseDemandExcel };

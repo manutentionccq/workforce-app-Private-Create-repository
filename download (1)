@@ -1,0 +1,142 @@
+const Database = require('better-sqlite3');
+const path = require('path');
+
+const DB_PATH = path.join(__dirname, '..', 'database', 'workforce.db');
+
+let db;
+
+function getDb() {
+  if (!db) {
+    db = new Database(DB_PATH);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    initSchema();
+  }
+  return db;
+}
+
+function initSchema() {
+  db.exec(`
+    -- Employees table
+    CREATE TABLE IF NOT EXISTS employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nom TEXT NOT NULL,
+      prenom TEXT NOT NULL,
+      email TEXT UNIQUE,
+      telephone TEXT,
+      statut TEXT DEFAULT 'actif', -- actif, inactif, maternite
+      heures_garanties INTEGER DEFAULT 0, -- 0, 35
+      -- Skills (1=oui, 0=non)
+      chef_equipe INTEGER DEFAULT 0,
+      sous_chef INTEGER DEFAULT 0,
+      chef_elec INTEGER DEFAULT 0,
+      chef_quai INTEGER DEFAULT 0,
+      trafic INTEGER DEFAULT 0,
+      cariste INTEGER DEFAULT 0,
+      skyjack INTEGER DEFAULT 0,
+      manut INTEGER DEFAULT 0,
+      rideaux INTEGER DEFAULT 0,
+      chargé_projet INTEGER DEFAULT 0,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Service demands (from client Excel)
+    CREATE TABLE IF NOT EXISTS demandes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      semaine_debut DATE NOT NULL,
+      semaine_fin DATE NOT NULL,
+      fichier_nom TEXT,
+      statut TEXT DEFAULT 'brouillon', -- brouillon, en_cours, complete
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Demand lines (each role/day/event)
+    CREATE TABLE IF NOT EXISTS demande_lignes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      demande_id INTEGER REFERENCES demandes(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      evenement TEXT NOT NULL,
+      role TEXT NOT NULL, -- CM, CMA, CE, R, MQ, L, Trafic, Ma, Mo
+      quantite INTEGER DEFAULT 1,
+      heure_debut TEXT,
+      heure_fin TEXT,
+      commentaires TEXT,
+      groupe_equipe TEXT, -- pour lier les événements sans saut de ligne
+      ordre INTEGER DEFAULT 0
+    );
+
+    -- Weekly availability (from Google Form responses)
+    CREATE TABLE IF NOT EXISTS disponibilites (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
+      semaine_debut DATE NOT NULL,
+      lundi TEXT DEFAULT 'indispo',   -- dispo_matin, dispo_soir, journee, indispo
+      mardi TEXT DEFAULT 'indispo',
+      mercredi TEXT DEFAULT 'indispo',
+      jeudi TEXT DEFAULT 'indispo',
+      vendredi TEXT DEFAULT 'indispo',
+      samedi TEXT DEFAULT 'indispo',
+      dimanche TEXT DEFAULT 'indispo',
+      heure_debut_pref TEXT DEFAULT '07:00',
+      limite_heures INTEGER DEFAULT 40,
+      vehicule INTEGER DEFAULT 0,
+      contraintes TEXT,
+      submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(employee_id, semaine_debut)
+    );
+
+    -- Schedule assignments
+    CREATE TABLE IF NOT EXISTS horaires (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      demande_id INTEGER REFERENCES demandes(id) ON DELETE CASCADE,
+      demande_ligne_id INTEGER REFERENCES demande_lignes(id),
+      employee_id INTEGER REFERENCES employees(id),
+      date DATE NOT NULL,
+      evenement TEXT NOT NULL,
+      role TEXT NOT NULL,
+      heure_debut TEXT NOT NULL,
+      heure_fin TEXT NOT NULL,
+      heures_total REAL,
+      commentaires TEXT,
+      statut TEXT DEFAULT 'prevu', -- prevu, confirme, annule
+      notifie INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Email log
+    CREATE TABLE IF NOT EXISTS email_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER,
+      type TEXT, -- disponibilite, horaire, rappel
+      destinataire TEXT,
+      sujet TEXT,
+      statut TEXT, -- envoye, erreur
+      sent_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- App settings
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    -- Default settings
+    INSERT OR IGNORE INTO settings (key, value) VALUES
+      ('smtp_host', ''),
+      ('smtp_port', '587'),
+      ('smtp_user', ''),
+      ('smtp_pass', ''),
+      ('smtp_from', ''),
+      ('google_form_url', ''),
+      ('google_sheet_id', ''),
+      ('company_name', 'Mon Entreprise'),
+      ('min_shift_hours', '6'),
+      ('max_weekly_hours', '40'),
+      ('min_legal_hours', '3');
+  `);
+}
+
+module.exports = { getDb };

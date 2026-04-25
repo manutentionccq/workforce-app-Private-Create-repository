@@ -1,0 +1,167 @@
+// Emails.jsx
+import React, { useContext, useEffect, useState } from 'react';
+import { ApiContext, ToastContext } from '../App';
+
+export function Emails() {
+  const api = useContext(ApiContext);
+  const toast = useContext(ToastContext);
+  const [demandes, setDemandes] = useState([]);
+  const [demandeId, setDemandeId] = useState('');
+  const [weekLabel, setWeekLabel] = useState('');
+  const [formUrl, setFormUrl] = useState('');
+  const [sending, setSending] = useState(false);
+  const [log, setLog] = useState([]);
+  const [formText, setFormText] = useState('');
+  const [activeTab, setActiveTab] = useState('availability');
+
+  useEffect(() => {
+    api.get('/demandes').then(r => setDemandes(r.data));
+    api.get('/emails/log').then(r => setLog(r.data));
+    api.get('/settings').then(r => { if (r.data.google_form_url) setFormUrl(r.data.google_form_url); });
+  }, []);
+
+  const generateFormText = async () => {
+    const r = await api.post('/form/generate', { weekLabel });
+    setFormText(r.data.formText);
+  };
+
+  const sendAvailability = async () => {
+    if (!weekLabel || !formUrl) { toast('Remplissez le label de semaine et l\'URL du formulaire', 'error'); return; }
+    setSending(true);
+    try {
+      const r = await api.post('/emails/send-availability', { weekLabel, formUrl });
+      toast(`${r.data.sent} emails envoyés`, 'success');
+      api.get('/emails/log').then(r => setLog(r.data));
+    } catch (e) { toast(e.response?.data?.error || 'Erreur SMTP — vérifiez les paramètres', 'error'); }
+    setSending(false);
+  };
+
+  const sendSchedules = async () => {
+    if (!demandeId || !weekLabel) { toast('Sélectionnez une demande et un label de semaine', 'error'); return; }
+    setSending(true);
+    try {
+      const r = await api.post('/emails/send-schedules', { demande_id: demandeId, weekLabel });
+      toast(`${r.data.sent} horaires envoyés`, 'success');
+      api.get('/emails/log').then(r => setLog(r.data));
+    } catch (e) { toast(e.response?.data?.error || 'Erreur', 'error'); }
+    setSending(false);
+  };
+
+  const S = {
+    page: { padding: 24 },
+    title: { fontSize: 20, fontWeight: 600, color: '#0f172a', marginBottom: 4 },
+    card: { background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', padding: '18px 20px', marginBottom: 16 },
+    cardTitle: { fontSize: 14, fontWeight: 600, color: '#374151', marginBottom: 14 },
+    input: { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' },
+    label: { fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4, display: 'block' },
+    btn: (v) => ({ padding: '9px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500, background: v==='primary'?'#3b82f6':v==='success'?'#16a34a':'#f1f5f9', color: v==='primary'||v==='success'?'#fff':'#374151', opacity: sending?0.7:1 }),
+    tab: (active) => ({ padding: '8px 18px', borderBottom: active?'2px solid #3b82f6':'2px solid transparent', cursor: 'pointer', fontSize: 13, background: 'none', border: 'none', borderBottom: active?'2px solid #3b82f6':'2px solid transparent', color: active?'#3b82f6':'#64748b', fontWeight: active?500:400 }),
+  };
+
+  return (
+    <div style={S.page}>
+      <div style={S.title}>Communications</div>
+      <div style={{ fontSize: 13, color: '#64748b', marginBottom: 20 }}>Envoi du formulaire de disponibilités et des horaires aux employés</div>
+
+      <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: 20 }}>
+        {[['availability','Disponibilités'],['schedules','Horaires'],['form','Formulaire Google'],['log','Journal']].map(([k,l]) => (
+          <button key={k} style={S.tab(activeTab===k)} onClick={() => setActiveTab(k)}>{l}</button>
+        ))}
+      </div>
+
+      {activeTab === 'availability' && (
+        <div style={S.card}>
+          <div style={S.cardTitle}>Envoyer le formulaire de disponibilités</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+            <div>
+              <label style={S.label}>Label de semaine (ex: 19 au 25 avril 2026)</label>
+              <input style={S.input} value={weekLabel} onChange={e => setWeekLabel(e.target.value)} placeholder="19 au 25 avril 2026" />
+            </div>
+            <div>
+              <label style={S.label}>URL du formulaire Google</label>
+              <input style={S.input} value={formUrl} onChange={e => setFormUrl(e.target.value)} placeholder="https://docs.google.com/forms/..." />
+            </div>
+          </div>
+          <button style={S.btn('primary')} disabled={sending} onClick={sendAvailability}>
+            {sending ? 'Envoi en cours...' : 'Envoyer à tous les employés actifs'}
+          </button>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>Le formulaire sera envoyé à tous les employés actifs ayant un courriel configuré.</div>
+        </div>
+      )}
+
+      {activeTab === 'schedules' && (
+        <div style={S.card}>
+          <div style={S.cardTitle}>Envoyer les horaires individuels</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+            <div>
+              <label style={S.label}>Demande de service</label>
+              <select style={S.input} value={demandeId} onChange={e => setDemandeId(e.target.value)}>
+                <option value="">Choisir...</option>
+                {demandes.map(d => <option key={d.id} value={d.id}>{d.semaine_debut} → {d.semaine_fin}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.label}>Label de semaine</label>
+              <input style={S.input} value={weekLabel} onChange={e => setWeekLabel(e.target.value)} placeholder="19 au 25 avril 2026" />
+            </div>
+          </div>
+          <button style={S.btn('success')} disabled={sending} onClick={sendSchedules}>
+            {sending ? 'Envoi en cours...' : 'Envoyer les horaires à tous les employés assignés'}
+          </button>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>Chaque employé recevra uniquement son propre horaire avec le détail de ses quarts et le cumul d'heures.</div>
+        </div>
+      )}
+
+      {activeTab === 'form' && (
+        <div style={S.card}>
+          <div style={S.cardTitle}>Générateur de formulaire Google Forms</div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={S.label}>Semaine</label>
+            <input style={{ ...S.input, maxWidth: 300 }} value={weekLabel} onChange={e => setWeekLabel(e.target.value)} placeholder="19 au 25 avril 2026" />
+          </div>
+          <button style={S.btn('primary')} onClick={generateFormText}>Générer le texte du formulaire</button>
+          {formText && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, color: '#374151' }}>Copiez ce texte dans Google Forms :</div>
+              <textarea style={{ width: '100%', height: 400, padding: 12, borderRadius: 6, border: '1px solid #d1d5db', fontSize: 12, fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box' }}
+                value={formText} readOnly />
+              <button style={{ ...S.btn(), marginTop: 8 }} onClick={() => { navigator.clipboard.writeText(formText); toast('Copié!', 'success'); }}>
+                Copier dans le presse-papier
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'log' && (
+        <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                {['Date', 'Employé', 'Type', 'Destinataire', 'Statut'].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 500, color: '#64748b', fontSize: 12 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {log.map(l => (
+                <tr key={l.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: '8px 14px', color: '#64748b' }}>{l.sent_at?.slice(0,16).replace('T',' ')}</td>
+                  <td style={{ padding: '8px 14px' }}>{l.prenom} {l.nom}</td>
+                  <td style={{ padding: '8px 14px' }}><span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#f1f5f9', color: '#64748b' }}>{l.type}</span></td>
+                  <td style={{ padding: '8px 14px', color: '#64748b' }}>{l.destinataire}</td>
+                  <td style={{ padding: '8px 14px' }}>
+                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, fontWeight: 500, background: l.statut==='envoye'?'#dcfce7':'#fee2e2', color: l.statut==='envoye'?'#166534':'#991b1b' }}>{l.statut}</span>
+                  </td>
+                </tr>
+              ))}
+              {log.length === 0 && <tr><td colSpan={5} style={{ padding: 30, textAlign: 'center', color: '#94a3b8' }}>Aucun email envoyé</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default Emails;
